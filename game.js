@@ -1,107 +1,175 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 
-// Game State
-let score = 0;
-let lives = 10;
-let money = 100;
-let gameActive = false;
-let waveInProgress = false;
-let frameCount = 0;
+// Screens
+const mainMenu = document.getElementById('main-menu');
+const gameOverScreen = document.getElementById('game-over-screen');
+const gameContainer = document.getElementById('game-container');
+const gameOverTitle = document.getElementById('game-over-title');
+const gameOverMessage = document.getElementById('game-over-message');
 
 // UI Elements
 const scoreEl = document.getElementById('score');
-const livesEl = document.getElementById('lives');
+const castleHealthEl = document.getElementById('castle-health');
 const moneyEl = document.getElementById('money');
-const startBtn = document.getElementById('start-btn');
+const waveInfoEl = document.getElementById('wave-info');
+const startWaveBtn = document.getElementById('start-wave-btn');
 
-// Game Constants
-const TILE_SIZE = 40;
-const PATH_COLOR = '#C2B280'; // Sand color
+// Game State
+let currentLevelIndex = 0;
+let score = 0;
+let money = 100;
+let castleHealth = 100;
+let maxCastleHealth = 100;
+let wave = 0;
+let totalWaves = 0;
+let gameActive = false;
+let waveInProgress = false;
+let frameCount = 0;
+let spawnTimer = 0;
+let bearsToSpawn = [];
+
+// Constants
+let TILE_SIZE = 60; // Will be dynamic based on screen size
 const TOWER_COST = 50;
-
-// Path Definition (Simple winding path)
-// Coordinates are in grid units (x, y)
-const pathPoints = [
-    {x: 0, y: 2},
-    {x: 5, y: 2},
-    {x: 5, y: 8},
-    {x: 12, y: 8},
-    {x: 12, y: 4},
-    {x: 18, y: 4},
-    {x: 18, y: 10},
-    {x: 20, y: 10} // Exit
-];
+const PATH_COLOR = '#C2B280';
 
 // Entities
-const bears = [];
-const towers = [];
-const projectiles = [];
+let bears = [];
+let towers = [];
+let projectiles = [];
+let pathPoints = [];
 
-// Classes
+// Levels Configuration
+const levels = [
+    {
+        name: "The Meadow",
+        waves: 5,
+        difficultyMultiplier: 1.0,
+        path: [ // Normalized coordinates (0-1)
+            {x: 0.0, y: 0.2}, {x: 0.3, y: 0.2}, {x: 0.3, y: 0.8},
+            {x: 0.7, y: 0.8}, {x: 0.7, y: 0.4}, {x: 0.9, y: 0.4}, {x: 0.9, y: 0.6}
+        ]
+    },
+    {
+        name: "The Forest",
+        waves: 8,
+        difficultyMultiplier: 1.2,
+        path: [
+            {x: 0.0, y: 0.5}, {x: 0.2, y: 0.5}, {x: 0.2, y: 0.2},
+            {x: 0.5, y: 0.2}, {x: 0.5, y: 0.8}, {x: 0.8, y: 0.8}, {x: 0.8, y: 0.5}, {x: 1.0, y: 0.5}
+        ]
+    },
+    {
+        name: "The Mountain",
+        waves: 10,
+        difficultyMultiplier: 1.5,
+        path: [
+            {x: 0.1, y: 0.0}, {x: 0.1, y: 0.8}, {x: 0.3, y: 0.8},
+            {x: 0.3, y: 0.2}, {x: 0.6, y: 0.2}, {x: 0.6, y: 0.9},
+            {x: 0.9, y: 0.9}, {x: 0.9, y: 0.5}, {x: 0.5, y: 0.5} // Ends in middle
+        ]
+    }
+];
+
+// Resize handling
+function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    TILE_SIZE = Math.min(canvas.width, canvas.height) / 15;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// --- Classes ---
+
 class Bear {
-    constructor() {
+    constructor(type) {
         this.pathIndex = 0;
-        this.x = pathPoints[0].x * TILE_SIZE;
-        this.y = pathPoints[0].y * TILE_SIZE + TILE_SIZE / 2; // Center on path
         this.speed = 1.5;
         this.health = 30;
         this.maxHealth = 30;
-        this.radius = 15;
-        this.color = '#8B4513'; // SaddleBrown
+        this.radius = TILE_SIZE * 0.3;
+        this.color = '#8B4513'; // Standard Brown
+        this.moneyValue = 10;
+        this.damage = 10; // Damage to castle
+        this.type = type || 'normal';
+        this.attackCooldown = 0;
 
-        // Calculate initial target
-        this.targetX = pathPoints[1].x * TILE_SIZE + TILE_SIZE / 2;
-        this.targetY = pathPoints[1].y * TILE_SIZE + TILE_SIZE / 2;
+        // Apply type stats
+        if (this.type === 'tank') {
+            this.health = 100;
+            this.maxHealth = 100;
+            this.speed = 0.8;
+            this.radius = TILE_SIZE * 0.4;
+            this.color = '#3e2723'; // Dark Brown
+            this.moneyValue = 30;
+            this.damage = 25;
+        } else if (this.type === 'attacker') {
+            this.health = 50;
+            this.maxHealth = 50;
+            this.speed = 1.2;
+            this.color = '#FF69B4'; // Pink
+            this.moneyValue = 20;
+            this.damage = 15;
+        }
+
+        // Difficulty scaling
+        const multiplier = levels[currentLevelIndex].difficultyMultiplier + (wave * 0.1);
+        this.health *= multiplier;
+        this.maxHealth = this.health;
+
+        // Position at start
+        const start = getPathPoint(0);
+        this.x = start.x;
+        this.y = start.y;
+        this.target = getPathPoint(1);
     }
 
     update() {
-        const dx = this.targetX - this.x;
-        const dy = this.targetY - this.y;
+        // Attacker logic
+        if (this.type === 'attacker') {
+            if (this.attackCooldown > 0) this.attackCooldown--;
+
+            // Find nearby tower to attack
+            if (this.attackCooldown <= 0) {
+                for (const tower of towers) {
+                    const dist = Math.hypot(tower.x - this.x, tower.y - this.y);
+                    if (dist < TILE_SIZE * 2) {
+                        // Attack tower!
+                        // For simplicity, let's just destroy it or disable it?
+                        // Let's damage it? Towers don't have health yet.
+                        // Let's just stun it or remove it.
+                        // "Attacks your towers" -> Let's say it destroys them if very close, or shoots back.
+                        // Let's make it shoot a projectile at the tower.
+                        // Or simpler: if close, destroy tower and pause bear for a bit.
+                        if (dist < TILE_SIZE) {
+                            const idx = towers.indexOf(tower);
+                            if (idx > -1) {
+                                towers.splice(idx, 1);
+                                this.attackCooldown = 120; // 2 seconds cooldown
+                                // Visual effect could be added here
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Movement
+        const dx = this.target.x - this.x;
+        const dy = this.target.y - this.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
 
         if (dist < this.speed) {
-            this.x = this.targetX;
-            this.y = this.targetY;
+            this.x = this.target.x;
+            this.y = this.target.y;
             this.pathIndex++;
             if (this.pathIndex >= pathPoints.length - 1) {
-                this.reachedEnd();
+                this.reachedCastle();
                 return;
             }
-            // Update target
-            // Handle vertical/horizontal segments correctly for centering
-            // For simplicity, we just target the next point's grid center
-            // But since points are corners, we need to be careful.
-            // Actually, let's just target the exact coordinates of the path points scaled up.
-            // Wait, pathPoints are grid coordinates. Let's refine target logic.
-            const nextPoint = pathPoints[this.pathIndex + 1];
-
-            // If moving horizontal
-            if (pathPoints[this.pathIndex].y === nextPoint.y) {
-                 this.targetY = nextPoint.y * TILE_SIZE + TILE_SIZE / 2;
-                 // Determine direction
-                 if (nextPoint.x > pathPoints[this.pathIndex].x) {
-                     this.targetX = nextPoint.x * TILE_SIZE + TILE_SIZE / 2; // Target center of tile
-                     // Actually, for corners, we want to go to the corner?
-                     // Let's stick to center of tiles.
-                 } else {
-                     this.targetX = nextPoint.x * TILE_SIZE + TILE_SIZE / 2;
-                 }
-            } else {
-                // Vertical
-                this.targetX = nextPoint.x * TILE_SIZE + TILE_SIZE / 2;
-                this.targetY = nextPoint.y * TILE_SIZE + TILE_SIZE / 2;
-            }
-
-            // Simple fix: just target the next point * TILE_SIZE + offset
-            this.targetX = pathPoints[this.pathIndex + 1].x * TILE_SIZE + (pathPoints[this.pathIndex + 1].x > pathPoints[this.pathIndex].x ? TILE_SIZE/2 : TILE_SIZE/2);
-            // This logic is getting messy. Let's simplify: Path points are waypoints.
-            // We just move towards pathPoints[pathIndex + 1].
-
-            const p = pathPoints[this.pathIndex + 1];
-            this.targetX = p.x * TILE_SIZE + TILE_SIZE / 2;
-            this.targetY = p.y * TILE_SIZE + TILE_SIZE / 2;
-
+            this.target = getPathPoint(this.pathIndex + 1);
         } else {
             this.x += (dx / dist) * this.speed;
             this.y += (dy / dist) * this.speed;
@@ -115,33 +183,41 @@ class Bear {
         ctx.fill();
 
         // Ears
+        const earOffset = this.radius * 0.7;
+        const earSize = this.radius * 0.4;
         ctx.beginPath();
-        ctx.arc(this.x - 10, this.y - 10, 6, 0, Math.PI * 2);
-        ctx.arc(this.x + 10, this.y - 10, 6, 0, Math.PI * 2);
+        ctx.arc(this.x - earOffset, this.y - earOffset, earSize, 0, Math.PI * 2);
+        ctx.arc(this.x + earOffset, this.y - earOffset, earSize, 0, Math.PI * 2);
         ctx.fill();
 
         // Health bar
+        const barWidth = this.radius * 2;
         ctx.fillStyle = 'red';
-        ctx.fillRect(this.x - 15, this.y - 25, 30, 4);
-        ctx.fillStyle = 'green';
-        ctx.fillRect(this.x - 15, this.y - 25, 30 * (this.health / this.maxHealth), 4);
+        ctx.fillRect(this.x - this.radius, this.y - this.radius - 10, barWidth, 4);
+        ctx.fillStyle = '#00FF00';
+        ctx.fillRect(this.x - this.radius, this.y - this.radius - 10, barWidth * (this.health / this.maxHealth), 4);
     }
 
     takeDamage(amount) {
         this.health -= amount;
         if (this.health <= 0) {
-            money += 10;
-            score += 100;
+            money += this.moneyValue;
+            score += this.moneyValue * 10;
             updateUI();
             return true; // Dead
         }
         return false;
     }
 
-    reachedEnd() {
-        lives--;
+    reachedCastle() {
+        castleHealth -= this.damage;
+        if (castleHealth < 0) castleHealth = 0;
         updateUI();
-        this.health = 0; // Kill it so it gets removed
+        this.health = 0; // Remove bear
+
+        if (castleHealth <= 0) {
+            endGame(false);
+        }
     }
 }
 
@@ -149,18 +225,16 @@ class Tower {
     constructor(x, y) {
         this.x = x;
         this.y = y;
-        this.range = 150;
+        this.range = TILE_SIZE * 3.5;
         this.damage = 10;
-        this.fireRate = 60; // Frames between shots
+        this.fireRate = 45;
         this.cooldown = 0;
-        this.color = '#808080';
     }
 
     update() {
         if (this.cooldown > 0) this.cooldown--;
 
         if (this.cooldown <= 0) {
-            // Find target
             const target = this.findTarget();
             if (target) {
                 this.shoot(target);
@@ -170,7 +244,6 @@ class Tower {
     }
 
     findTarget() {
-        // Simple: find closest bear
         let closest = null;
         let minDist = Infinity;
 
@@ -191,17 +264,12 @@ class Tower {
     draw() {
         // Base
         ctx.fillStyle = '#696969';
-        ctx.fillRect(this.x - 15, this.y - 15, 30, 30);
+        ctx.fillRect(this.x - TILE_SIZE/3, this.y - TILE_SIZE/3, TILE_SIZE/1.5, TILE_SIZE/1.5);
         // Turret
         ctx.fillStyle = '#A9A9A9';
         ctx.beginPath();
-        ctx.arc(this.x, this.y, 10, 0, Math.PI * 2);
+        ctx.arc(this.x, this.y, TILE_SIZE/4, 0, Math.PI * 2);
         ctx.fill();
-        // Range (optional, maybe on hover)
-        // ctx.strokeStyle = 'rgba(0,0,0,0.1)';
-        // ctx.beginPath();
-        // ctx.arc(this.x, this.y, this.range, 0, Math.PI * 2);
-        // ctx.stroke();
     }
 }
 
@@ -210,7 +278,7 @@ class Projectile {
         this.x = x;
         this.y = y;
         this.target = target;
-        this.speed = 5;
+        this.speed = 8;
         this.damage = 10;
         this.active = true;
     }
@@ -236,7 +304,6 @@ class Projectile {
     hit() {
         this.active = false;
         if (this.target.takeDamage(this.damage)) {
-            // Target died
             const index = bears.indexOf(this.target);
             if (index > -1) bears.splice(index, 1);
         }
@@ -245,89 +312,197 @@ class Projectile {
     draw() {
         ctx.fillStyle = 'black';
         ctx.beginPath();
-        ctx.arc(this.x, this.y, 3, 0, Math.PI * 2);
+        ctx.arc(this.x, this.y, 4, 0, Math.PI * 2);
         ctx.fill();
     }
 }
 
-// Input Handling
+// --- Helper Functions ---
+
+function getPathPoint(index) {
+    const p = pathPoints[index];
+    return {
+        x: p.x * canvas.width,
+        y: p.y * canvas.height
+    };
+}
+
+function initLevel(levelIndex) {
+    currentLevelIndex = levelIndex;
+    const level = levels[levelIndex];
+
+    pathPoints = level.path;
+    totalWaves = level.waves;
+    wave = 0;
+    score = 0;
+    money = 150; // Starting money
+    castleHealth = 100;
+    bears = [];
+    towers = [];
+    projectiles = [];
+    gameActive = true;
+    waveInProgress = false;
+
+    updateUI();
+
+    mainMenu.classList.remove('active');
+    gameOverScreen.classList.remove('active');
+    gameContainer.style.display = 'block';
+
+    // Start loop if not running
+    if (!requestId) loop();
+}
+
+function startWave() {
+    if (wave >= totalWaves) return;
+
+    wave++;
+    waveInProgress = true;
+    startWaveBtn.disabled = true;
+    updateUI();
+
+    // Generate wave composition
+    bearsToSpawn = [];
+    const baseCount = 5 + wave * 2;
+
+    for (let i = 0; i < baseCount; i++) {
+        // Mix of bears based on wave number
+        let type = 'normal';
+        if (wave > 2 && Math.random() < 0.3) type = 'tank';
+        if (wave > 1 && Math.random() < 0.2) type = 'attacker';
+
+        bearsToSpawn.push(type);
+    }
+
+    spawnTimer = 0;
+}
+
+function endGame(victory) {
+    gameActive = false;
+    gameContainer.style.display = 'none';
+    gameOverScreen.classList.add('active');
+
+    if (victory) {
+        gameOverTitle.innerText = "Victory!";
+        gameOverMessage.innerText = `You defended the honey! Score: ${score}`;
+    } else {
+        gameOverTitle.innerText = "Game Over";
+        gameOverMessage.innerText = "The bears stole all your honey!";
+    }
+}
+
+function updateUI() {
+    scoreEl.innerText = `Score: ${score}`;
+    castleHealthEl.innerText = `Castle: ${Math.ceil(castleHealth)}%`;
+    moneyEl.innerText = `Honey: ${money}`;
+    waveInfoEl.innerText = `Wave: ${wave}/${totalWaves}`;
+
+    if (castleHealth < 30) castleHealthEl.style.color = 'red';
+    else castleHealthEl.style.color = '#4a3728';
+}
+
+// --- Input ---
+
 canvas.addEventListener('click', (e) => {
+    if (!gameActive) return;
+
     const rect = canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
-    // Snap to grid
-    const gridX = Math.floor(x / TILE_SIZE);
-    const gridY = Math.floor(y / TILE_SIZE);
-
-    // Check if valid placement
-    if (isValidPlacement(gridX, gridY)) {
-        if (money >= TOWER_COST) {
-            towers.push(new Tower(gridX * TILE_SIZE + TILE_SIZE / 2, gridY * TILE_SIZE + TILE_SIZE / 2));
-            money -= TOWER_COST;
-            updateUI();
-        }
+    // Snap to grid-ish (just check distance to other towers and path)
+    if (money >= TOWER_COST && isValidPlacement(x, y)) {
+        towers.push(new Tower(x, y));
+        money -= TOWER_COST;
+        updateUI();
     }
 });
 
-function isValidPlacement(gx, gy) {
+function isValidPlacement(x, y) {
     // Check bounds
-    if (gx < 0 || gx >= canvas.width / TILE_SIZE || gy < 0 || gy >= canvas.height / TILE_SIZE) return false;
+    if (x < 0 || x > canvas.width || y < 0 || y > canvas.height) return false;
 
-    // Check path collision
-    // Simple check: iterate path segments
+    // Check distance to path
+    // We approximate path as line segments
     for (let i = 0; i < pathPoints.length - 1; i++) {
-        const p1 = pathPoints[i];
-        const p2 = pathPoints[i+1];
+        const p1 = getPathPoint(i);
+        const p2 = getPathPoint(i+1);
 
-        // Check if point is on segment
-        const minX = Math.min(p1.x, p2.x);
-        const maxX = Math.max(p1.x, p2.x);
-        const minY = Math.min(p1.y, p2.y);
-        const maxY = Math.max(p1.y, p2.y);
+        // Distance from point to line segment
+        const A = x - p1.x;
+        const B = y - p1.y;
+        const C = p2.x - p1.x;
+        const D = p2.y - p1.y;
 
-        if (gx >= minX && gx <= maxX && gy >= minY && gy <= maxY) return false;
+        const dot = A * C + B * D;
+        const len_sq = C * C + D * D;
+        let param = -1;
+        if (len_sq !== 0) param = dot / len_sq;
+
+        let xx, yy;
+
+        if (param < 0) {
+            xx = p1.x;
+            yy = p1.y;
+        } else if (param > 1) {
+            xx = p2.x;
+            yy = p2.y;
+        } else {
+            xx = p1.x + param * C;
+            yy = p1.y + param * D;
+        }
+
+        const dx = x - xx;
+        const dy = y - yy;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (dist < TILE_SIZE * 0.8) return false; // Too close to path
     }
 
     // Check existing towers
     for (const t of towers) {
-        const tgx = Math.floor(t.x / TILE_SIZE);
-        const tgy = Math.floor(t.y / TILE_SIZE);
-        if (gx === tgx && gy === tgy) return false;
+        const dist = Math.hypot(t.x - x, t.y - y);
+        if (dist < TILE_SIZE) return false;
     }
 
     return true;
 }
 
-startBtn.addEventListener('click', () => {
-    if (!waveInProgress) {
-        startWave();
-    }
+// --- Menu Listeners ---
+
+document.querySelectorAll('.level-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const levelIndex = parseInt(btn.dataset.level);
+        initLevel(levelIndex);
+    });
 });
 
-function startWave() {
-    waveInProgress = true;
-    startBtn.disabled = true;
-    let bearsToSpawn = 5 + Math.floor(score / 500);
-    let spawnInterval = setInterval(() => {
-        bears.push(new Bear());
-        bearsToSpawn--;
-        if (bearsToSpawn <= 0) {
-            clearInterval(spawnInterval);
-            // Wave ends when all bears are dead or gone
-        }
-    }, 1000);
-}
+startWaveBtn.addEventListener('click', () => {
+    if (!waveInProgress) startWave();
+});
 
-function updateUI() {
-    scoreEl.innerText = `Score: ${score}`;
-    livesEl.innerText = `Lives: ${lives}`;
-    moneyEl.innerText = `Honey: ${money}`;
-}
+document.getElementById('restart-btn').addEventListener('click', () => {
+    initLevel(currentLevelIndex);
+});
 
-// Game Loop
+document.getElementById('menu-btn').addEventListener('click', () => {
+    gameOverScreen.classList.remove('active');
+    mainMenu.classList.add('active');
+    gameActive = false;
+});
+
+
+// --- Game Loop ---
+let requestId;
+
 function loop() {
+    if (!gameActive) return;
+
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Draw Background (Grass)
+    ctx.fillStyle = '#90EE90';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     // Draw Path
     ctx.strokeStyle = PATH_COLOR;
@@ -335,19 +510,38 @@ function loop() {
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.beginPath();
-    ctx.moveTo(pathPoints[0].x * TILE_SIZE + TILE_SIZE/2, pathPoints[0].y * TILE_SIZE + TILE_SIZE/2);
+    const start = getPathPoint(0);
+    ctx.moveTo(start.x, start.y);
     for (let i = 1; i < pathPoints.length; i++) {
-        ctx.lineTo(pathPoints[i].x * TILE_SIZE + TILE_SIZE/2, pathPoints[i].y * TILE_SIZE + TILE_SIZE/2);
+        const p = getPathPoint(i);
+        ctx.lineTo(p.x, p.y);
     }
     ctx.stroke();
 
-    // Update and Draw Towers
+    // Draw Castle
+    const end = getPathPoint(pathPoints.length - 1);
+    ctx.fillStyle = '#FFD700'; // Gold
+    ctx.fillRect(end.x - TILE_SIZE, end.y - TILE_SIZE, TILE_SIZE*2, TILE_SIZE*2);
+    // Castle details
+    ctx.fillStyle = '#8B4513'; // Door
+    ctx.fillRect(end.x - TILE_SIZE/4, end.y, TILE_SIZE/2, TILE_SIZE);
+
+    // Spawning Logic
+    if (waveInProgress && bearsToSpawn.length > 0) {
+        spawnTimer++;
+        if (spawnTimer > 60) { // Spawn every second
+            const type = bearsToSpawn.shift();
+            bears.push(new Bear(type));
+            spawnTimer = 0;
+        }
+    }
+
+    // Update Entities
     for (const tower of towers) {
         tower.update();
         tower.draw();
     }
 
-    // Update and Draw Bears
     for (let i = bears.length - 1; i >= 0; i--) {
         const bear = bears[i];
         bear.update();
@@ -357,7 +551,6 @@ function loop() {
         }
     }
 
-    // Update and Draw Projectiles
     for (let i = projectiles.length - 1; i >= 0; i--) {
         const p = projectiles[i];
         p.update();
@@ -368,23 +561,15 @@ function loop() {
     }
 
     // Check Wave End
-    if (waveInProgress && bears.length === 0 && frameCount % 60 === 0) {
-        // Simple check: if no bears and we finished spawning (implied by logic, though spawning is async)
-        // Ideally we track spawning state. For now, let's just re-enable button if 0 bears.
-        // But spawning might still be happening.
-        // Let's just leave it for now.
-        startBtn.disabled = false;
+    if (waveInProgress && bears.length === 0 && bearsToSpawn.length === 0) {
         waveInProgress = false;
-    }
+        startWaveBtn.disabled = false;
 
-    if (lives <= 0) {
-        alert("Game Over! The bears got your honey!");
-        document.location.reload();
+        if (wave >= totalWaves) {
+            endGame(true);
+        }
     }
 
     frameCount++;
-    requestAnimationFrame(loop);
+    requestId = requestAnimationFrame(loop);
 }
-
-// Start loop
-loop();

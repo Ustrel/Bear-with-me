@@ -7,15 +7,37 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div id="game-container">
-        <canvas id="gameCanvas" width="800" height="600"></canvas>
-        <div id="ui-layer">
-            <div id="score">Score: 0</div>
-            <div id="lives">Lives: 10</div>
-            <div id="money">Honey: 100</div>
-            <button id="start-btn">Start Wave</button>
+    <!-- Main Menu -->
+    <div id="main-menu" class="screen active">
+        <h1>Invasion of the Bears</h1>
+        <p>Defend your Honey Castle!</p>
+        <div class="level-select">
+            <button class="level-btn" data-level="0">Level 1: The Meadow (Easy)</button>
+            <button class="level-btn" data-level="1">Level 2: The Forest (Medium)</button>
+            <button class="level-btn" data-level="2">Level 3: The Mountain (Hard)</button>
         </div>
     </div>
+
+    <!-- Game Over Screen -->
+    <div id="game-over-screen" class="screen">
+        <h1 id="game-over-title">Game Over</h1>
+        <p id="game-over-message">The bears stole all your honey!</p>
+        <button id="restart-btn">Restart Level</button>
+        <button id="menu-btn">Main Menu</button>
+    </div>
+
+    <!-- Game Container -->
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+        <div id="ui-layer">
+            <div class="stat-box" id="score">Score: 0</div>
+            <div class="stat-box" id="castle-health">Castle: 100%</div>
+            <div class="stat-box" id="money">Honey: 100</div>
+            <div class="stat-box" id="wave-info">Wave: 1/5</div>
+            <button id="start-wave-btn">Start Wave</button>
+        </div>
+    </div>
+
     <script src="game.js"></script>
 </body>
 </html>
